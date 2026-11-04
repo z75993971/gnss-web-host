@@ -110,6 +110,28 @@ Note that GeoJSON uses `[lon, lat, alt]` while GPX uses `lat`/`lon` attributes.
 
 ---
 
+## HarmonyOS collector
+
+`harmony/` is a separate ArkTS app for the case where you have no laptop at hand:
+the phone powers the module over OTG, reads the USB serial port, parses NMEA, draws the track,
+and writes raw sentences into the app sandbox.
+
+The demo pipeline has been verified on a real device (HarmonyOS 7.0 / API 26):
+parsing, UI, track, file output, maps. **Real USB serial reading is still unverified** —
+it needs the module plugged into the phone's USB-C port.
+
+```bash
+cd harmony
+bash tools/build.sh          # requires DevEco Studio and your own signing config
+```
+
+No signing material or map key is shipped in this repo: `signingConfigs` is an empty array
+and `map.html` uses an `__AMAP_KEY__` placeholder that `tools/set-map-key.sh` fills in.
+Files written by the app are plain NMEA lines, so they can be dropped straight into
+the log analyser above.
+
+---
+
 ## Tests
 
 ```bash

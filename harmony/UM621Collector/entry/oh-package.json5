@@ -1,0 +1,9 @@
+{
+  "name": "entry",
+  "version": "1.0.0",
+  "description": "UM621A 采集器主模块",
+  "main": "",
+  "author": "zhangrui",
+  "license": "Apache-2.0",
+  "dependencies": {}
+}

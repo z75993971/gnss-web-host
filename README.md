@@ -3,6 +3,9 @@
 浏览器直接读串口，不用装软件、不用装驱动。天空图、载噪比、轨迹、时序、原始流、导出，
 再加一个能把 NMEA 日志读回来做诊断的报告引擎，全在一个页面里。
 
+仓库里还有一份**鸿蒙手机采集器**（`harmony/`，ArkTS）：插上模块板就能在手机上采，
+采完把 `raw_*.nmea` 拖回这个页面出报告。
+
 ![主界面](docs/screenshot-main.png)
 
 做这个工具的起点是两个具体问题：换一块板子就要重装一套调试软件；日志导出之后没人读得回来。
@@ -189,6 +192,29 @@ python3 tools/mock_caster.py 2101     # 假 caster：会鉴权、推 RTCM3 帧�
 
 ---
 
+## 鸿蒙手机采集器
+
+`harmony/` 是一个独立的 ArkTS 工程，解决「手上没有电脑，但想采一段路测数据」的场景：
+手机 OTG 给模块板供电，App 直接读 USB 串口、解析、画轨迹、把原始报文写进手机沙箱。
+
+| 仪表 | 星座 |
+|---|---|
+| ![手机仪表](harmony/截图/03-演示模式-跑通.jpeg) | ![手机星座](harmony/截图/04-星座图.jpeg) |
+
+已经在真机（HarmonyOS 7.0 / API 26）跑通演示模式的全链路：解析、界面、轨迹、落盘、日志、地图。
+**真实 USB 串口读取还没验证** —— 等模块板插上手机才能确认，这一点在 `harmony/README.md` 里写明了。
+
+```bash
+cd harmony
+bash tools/build.sh          # 需先装 DevEco Studio 并在 IDE 里配好你自己的签名
+```
+
+**仓库里不含签名材料和地图 Key。** `build-profile.json5` 的 `signingConfigs` 是空数组，
+`map.html` 里是 `__AMAP_KEY__` 占位符，用自己的 Key 跑 `tools/set-map-key.sh` 填。
+手机上落盘的 `raw_*.nmea` 是纯 NMEA 行，可以直接拖回上面的日志分析面板。
+
+---
+
 ## 测试
 
 ```bash
@@ -227,7 +253,7 @@ python3 tools/e2e_analysis.py   # 载入示例 → 核对诊断条数与评级 �
 - [ ] u-blox UBX：`NAV-PVT` / `NAV-SAT` / `MON-VER` 解析，`CFG-VALSET` 收发（需要真机验证）
 - [ ] 多会话对比：两次路测的可用率、跳点、链路稳定性并排看
 - [ ] RTCM3 差分数据透传日志与回放
-- [ ] 移动端采集（已有鸿蒙 ArkTS 版本原型，暂未并入本仓库）
+- [ ] 鸿蒙采集器：真实 USB 串口读取验证、后台长时任务、日志导出到公共目录
 
 ---
 
@@ -252,6 +278,7 @@ server.py       本地服务：静态托管 + 静态地图代理 + NTRIP 客户�
 selftest.mjs    单测（260 项）
 docs/           截图与设计文档
 tools/          假 caster、示例数据生成、端到端验证
+harmony/        鸿蒙手机采集器（ArkTS，独立工程，见 harmony/README.md）
 ```
 
 实现细节另见 [docs/analysis-engine.md](docs/analysis-engine.md)（诊断引擎）与

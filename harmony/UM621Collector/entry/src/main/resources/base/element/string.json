@@ -1,0 +1,7 @@
+{
+  "string": [
+    { "name": "module_desc", "value": "UM621A 串口采集器" },
+    { "name": "EntryAbility_desc", "value": "采集 GNSS 原始报文与轨迹" },
+    { "name": "EntryAbility_label", "value": "UM621采集器" }
+  ]
+}

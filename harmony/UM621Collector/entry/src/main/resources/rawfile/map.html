@@ -1,0 +1,420 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<title>UM621 地图</title>
+<style>
+  html,body{margin:0;padding:0;height:100%;background:#0B0F14;overflow:hidden;
+    font-family:-apple-system,"PingFang SC",sans-serif;-webkit-tap-highlight-color:transparent}
+  #map{width:100%;height:100%;position:absolute;inset:0}
+
+  /* 当前位置圆点 */
+  .dot{width:18px;height:18px;border-radius:50%;background:#3FB950;
+    box-shadow:0 0 0 4px rgba(63,185,80,.28),0 0 12px rgba(63,185,80,.6)}
+  .dot.nofix{background:#F85149;box-shadow:0 0 0 4px rgba(248,81,73,.28)}
+
+  /* 右上角按钮组 */
+  .tools{position:absolute;right:12px;top:12px;display:flex;flex-direction:column;gap:8px;z-index:10}
+  .tools button{width:44px;height:44px;border-radius:22px;border:1px solid #2A3441;
+    background:rgba(21,27,35,.92);color:#8B949E;font-size:11px;line-height:1.15;
+    backdrop-filter:blur(10px);padding:0;display:flex;align-items:center;justify-content:center;
+    flex-direction:column;font-family:inherit}
+  .tools button.on{background:#238636;color:#fff;border-color:#238636}
+  .tools button:active{opacity:.7}
+
+  /* 底部信息条 */
+  /* 鸿蒙 WebView 不认 env(safe-area-inset-bottom)，用固定值给系统导航条留位，
+     否则坐标那行会被手势条压住看不见 */
+  .info{position:absolute;left:0;right:0;bottom:0;padding:12px 14px 38px;
+    background:linear-gradient(transparent,rgba(11,15,20,.94) 32%);
+    color:#8B949E;font-size:11px;font-family:ui-monospace,Menlo,monospace;
+    display:flex;gap:14px;align-items:baseline;z-index:10;pointer-events:none}
+  .info b{color:#E6EDF3;font-weight:600;font-size:13px}
+  .info .q{color:#D29922}
+  .info .q.ok{color:#3FB950}
+  .info .q.bad{color:#F85149}
+
+  /* 加载 / 错误提示 */
+  .mask{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
+    background:#0B0F14;color:#8B949E;font-size:13px;text-align:center;padding:24px;
+    line-height:1.7;z-index:20;flex-direction:column;gap:10px}
+  .mask.hide{display:none}
+  .mask .t{color:#F85149;font-size:14px;font-weight:600}
+  .mask code{color:#58A6FF;font-size:11px;word-break:break-all}
+</style>
+</head>
+<body>
+
+<div id="map"></div>
+
+<div class="tools">
+  <button id="btnFollow" class="on" onclick="toggleFollow()">跟随</button>
+  <button id="btnLayer" onclick="toggleLayer()">图层</button>
+  <button id="btnClear" onclick="clearTrail()">清轨迹</button>
+</div>
+
+<div class="info">
+  <div><b id="iCoord">—</b></div>
+  <div id="iFix" class="q">等定位</div>
+  <div id="iAcc"></div>
+</div>
+
+<div class="mask" id="mask">
+  <div>正在加载高德地图…</div>
+</div>
+
+<script>
+// ============ 高德 Key ============
+// 本仓库不内置任何可用 Key。用 tools/set-map-key.sh 写入你自己的
+// 「Web端(JS API)」类型 Key，然后重新编译。留空则地图页会提示未配置，不会白屏。
+var AMAP_KEY = '__AMAP_KEY__';
+var AMAP_SECRET = '';
+// ===================================
+
+// 密钥必须在加载 SDK 之前设置
+window._AMapSecurityConfig = { securityJsCode: AMAP_SECRET };
+
+var map = null;
+var posMarker = null;
+var accCircle = null;
+var polyline = null;
+var dots = null;
+var trailPath = [];
+var follow = true;
+var darkLayer = true;
+var lastFix = null;
+var sdkReady = false;
+
+// ---------- WGS84 → GCJ-02 ----------
+// GNSS 给的是 WGS84，高德底图是 GCJ-02（火星坐标）。
+// 不转换的话位置会整体偏移几百米，看起来像"飘到隔壁街"。
+// 注意：只在这里转换用于显示，落盘的原始日志必须保持 WGS84。
+var PI = Math.PI, AA = 6378245.0, EE = 0.00669342162296594323;
+
+function outOfChina(lng, lat) {
+  return !(lng > 73.66 && lng < 135.05 && lat > 3.86 && lat < 53.55);
+}
+function transformLat(x, y) {
+  var r = -100.0 + 2.0 * x + 3.0 * y + 0.2 * y * y + 0.1 * x * y + 0.2 * Math.sqrt(Math.abs(x));
+  r += (20.0 * Math.sin(6.0 * x * PI) + 20.0 * Math.sin(2.0 * x * PI)) * 2.0 / 3.0;
+  r += (20.0 * Math.sin(y * PI) + 40.0 * Math.sin(y / 3.0 * PI)) * 2.0 / 3.0;
+  r += (160.0 * Math.sin(y / 12.0 * PI) + 320 * Math.sin(y * PI / 30.0)) * 2.0 / 3.0;
+  return r;
+}
+function transformLng(x, y) {
+  var r = 300.0 + x + 2.0 * y + 0.1 * x * x + 0.1 * x * y + 0.1 * Math.sqrt(Math.abs(x));
+  r += (20.0 * Math.sin(6.0 * x * PI) + 20.0 * Math.sin(2.0 * x * PI)) * 2.0 / 3.0;
+  r += (20.0 * Math.sin(x * PI) + 40.0 * Math.sin(x / 3.0 * PI)) * 2.0 / 3.0;
+  r += (150.0 * Math.sin(x / 12.0 * PI) + 300.0 * Math.sin(x / 30.0 * PI)) * 2.0 / 3.0;
+  return r;
+}
+function wgs84ToGcj02(lng, lat) {
+  if (outOfChina(lng, lat)) return [lng, lat];
+  var dLat = transformLat(lng - 105.0, lat - 35.0);
+  var dLng = transformLng(lng - 105.0, lat - 35.0);
+  var radLat = lat / 180.0 * PI;
+  var magic = Math.sin(radLat);
+  magic = 1 - EE * magic * magic;
+  var sqrtMagic = Math.sqrt(magic);
+  dLat = (dLat * 180.0) / ((AA * (1 - EE)) / (magic * sqrtMagic) * PI);
+  dLng = (dLng * 180.0) / (AA / sqrtMagic * Math.cos(radLat) * PI);
+  return [lng + dLng, lat + dLat];
+}
+
+// ---------- 地图初始化 ----------
+function showMask(html) {
+  var m = document.getElementById('mask');
+  m.className = 'mask';
+  m.innerHTML = html;
+}
+function hideMask() {
+  document.getElementById('mask').className = 'mask hide';
+}
+
+function initMap() {
+  if (AMAP_KEY.indexOf('__AMAP') === 0 || AMAP_KEY.length < 10) {
+    showMask('<div class="t">还没配置高德 Key</div>' +
+      '<div>需要在 map.html 里填入「Web端(JS API)」类型的 Key 和安全密钥</div>');
+    return;
+  }
+  try {
+    map = new AMap.Map('map', {
+      viewMode: '2D',
+      zoom: 17,
+      center: [108.886, 34.164],
+      mapStyle: 'amap://styles/dark',
+      resizeEnable: true,
+      showLabel: true
+    });
+
+    // 实测：mapStyle 写在构造参数里有时不生效（出来还是浅色底图）。
+    // 加载完再显式设一次，两层保险
+    map.on('complete', function () {
+      try {
+        map.setMapStyle('amap://styles/dark');
+      } catch (e) {
+      }
+    });
+    try {
+      map.setMapStyle('amap://styles/dark');
+    } catch (e) {
+    }
+
+    // 当前位置标记
+    posMarker = new AMap.Marker({
+      position: [108.886, 34.164],
+      content: '<div class="dot nofix"></div>',
+      offset: new AMap.Pixel(-9, -9),
+      zIndex: 200,
+      visible: false
+    });
+    map.add(posMarker);
+
+    // 定位精度圈
+    accCircle = new AMap.Circle({
+      center: [108.886, 34.164],
+      radius: 8,
+      strokeColor: '#3FB950',
+      strokeOpacity: 0.55,
+      strokeWeight: 1,
+      fillColor: '#3FB950',
+      fillOpacity: 0.10,
+      visible: false
+    });
+    map.add(accCircle);
+
+    // 轨迹连接线：虚线，淡一点，让圆圈点更醒目。
+    // 注意：path 不能给空数组，高德会报 "error Polyline path"
+    polyline = new AMap.Polyline({
+      strokeColor: '#39D2C0',
+      strokeWeight: 2,
+      strokeOpacity: 0.5,
+      strokeStyle: 'dashed',
+      strokeDasharray: [8, 6],
+      lineJoin: 'round',
+      lineCap: 'round',
+      showDir: false
+    });
+    map.add(polyline);
+
+    // 轨迹点画成小圆圈。
+    // 用 MassMarks 而不是一堆 CircleMarker：上千个 CircleMarker 会把地图拖卡，
+    // MassMarks 就是专门为大量点设计的
+    var dotSvg = '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14">' +
+      '<circle cx="7" cy="7" r="4" fill="#0B0F14" fill-opacity="0.88" ' +
+      'stroke="#39D2C0" stroke-width="1.8"/></svg>';
+    dots = new AMap.MassMarks([], {
+      zIndex: 120,
+      style: {
+        url: 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(dotSvg),
+        anchor: new AMap.Pixel(7, 7),
+        size: new AMap.Size(14, 14)
+      }
+    });
+    dots.setMap(map);
+
+    sdkReady = true;
+    hideMask();
+  } catch (e) {
+    showMask('<div class="t">地图初始化失败</div><div>' + (e && e.message ? e.message : e) + '</div>');
+  }
+}
+
+// ---------- 给鸿蒙侧调用的接口 ----------
+
+/** 把轨迹点同步到圆点图层。
+ *  按「距离」抽样而不是按点数：轨迹点本来就是 1Hz 采的，
+ *  速度慢时点密得连成一团，速度快时又稀稀拉拉。
+ *  固定每 12 米画一个圆圈，视觉上最匀 */
+var MIN_DOT_GAP_M = 12;
+
+function updateDots() {
+  if (!dots) return;
+  var n = trailPath.length;
+  if (n === 0) {
+    dots.setData([]);
+    return;
+  }
+  if (n > 6000) {
+    // 极端情况（跑了几小时）保底抽样，别把渲染压垮
+    var keep = 6000;
+    var thin = [];
+    var st = Math.ceil(n / keep);
+    for (var k = 0; k < n; k = k + st) {
+      thin.push(trailPath[k]);
+    }
+    thin.push(trailPath[n - 1]);
+    trailPath = thin;
+    n = thin.length;
+  }
+
+  var data = [];
+  var lastLng = 0, lastLat = 0, has = false;
+  for (var i = 0; i < n; i++) {
+    var p = trailPath[i];
+    if (!has) {
+      data.push({ lnglat: p });
+      lastLng = p[0];
+      lastLat = p[1];
+      has = true;
+      continue;
+    }
+    var dx = (p[0] - lastLng) * 111320 * Math.cos(p[1] * Math.PI / 180);
+    var dy = (p[1] - lastLat) * 110540;
+    if (Math.sqrt(dx * dx + dy * dy) >= MIN_DOT_GAP_M) {
+      data.push({ lnglat: p });
+      lastLng = p[0];
+      lastLat = p[1];
+    }
+  }
+  // 最后一个点一定要有，不然线尾是光的
+  var last = trailPath[n - 1];
+  if (data.length === 0 || data[data.length - 1].lnglat[0] !== last[0] ||
+      data[data.length - 1].lnglat[1] !== last[1]) {
+    data.push({ lnglat: last });
+  }
+  dots.setData(data);
+}
+
+/**
+ * 更新当前位置。
+ * @param lngWgs  经度（WGS84，设备原始值）
+ * @param latWgs  纬度（WGS84）
+ * @param acc     水平精度（米），没有就传 0
+ * @param quality 定位质量 0/1/2...
+ * @param speed   速度 km/h
+ */
+window.updatePos = function (lngWgs, latWgs, acc, quality, speed) {
+  if (!sdkReady) return;
+  if (!isFinite(lngWgs) || !isFinite(latWgs)) return;
+
+  var g = wgs84ToGcj02(lngWgs, latWgs);
+  var hasFix = quality > 0;
+  lastFix = { lng: g[0], lat: g[1], q: quality };
+
+  posMarker.setPosition(g);
+  posMarker.setContent('<div class="dot' + (hasFix ? '' : ' nofix') + '"></div>');
+  posMarker.show();
+
+  if (acc > 0) {
+    accCircle.setCenter(g);
+    accCircle.setRadius(acc);
+    accCircle.setOptions({
+      strokeColor: hasFix ? '#3FB950' : '#F85149',
+      fillColor: hasFix ? '#3FB950' : '#F85149'
+    });
+    accCircle.show();
+  }
+
+  // 轨迹点（只在有定位时追加）
+  if (hasFix) {
+    var n = trailPath.length;
+    if (n === 0) {
+      trailPath.push(g);
+    } else {
+      // 距离太近就不加点，避免静止时堆积几十万个点把浏览器卡死
+      var dx = (g[0] - trailPath[n - 1][0]) * 111320 * Math.cos(g[1] * PI / 180);
+      var dy = (g[1] - trailPath[n - 1][1]) * 110540;
+      if (Math.sqrt(dx * dx + dy * dy) > 0.8) {
+        trailPath.push(g);
+      }
+    }
+    if (trailPath.length > 20000) {
+      trailPath.splice(0, trailPath.length - 20000);
+    }
+    polyline.setPath(trailPath);
+    updateDots();
+  }
+
+  if (follow) {
+    map.setCenter(g);
+  }
+
+  // 底部信息
+  document.getElementById('iCoord').textContent =
+    latWgs.toFixed(6) + ', ' + lngWgs.toFixed(6);
+  var qEl = document.getElementById('iFix');
+  var qs = quality >= 2 ? '差分' : (quality === 1 ? '单点' : '无定位');
+  qEl.textContent = qs + (speed > 0 ? (' · ' + speed.toFixed(1) + ' km/h') : '');
+  qEl.className = 'q ' + (quality >= 2 ? 'ok' : (quality === 1 ? '' : 'bad'));
+  document.getElementById('iAcc').textContent = acc > 0 ? ('±' + acc.toFixed(0) + ' m') : '';
+};
+
+/** 整批灌入历史轨迹（首次进入或切页回来时补全）
+ *  注意：这里给的是「本次采集从第一包报文到最新」的完整轨迹，不做截断 */
+window.setTrail = function (arrJson) {
+  if (!sdkReady) return;
+  try {
+    var arr = JSON.parse(arrJson);
+    trailPath = [];
+    for (var i = 0; i < arr.length; i++) {
+      var g = wgs84ToGcj02(arr[i][0], arr[i][1]);
+      trailPath.push(g);
+    }
+    polyline.setPath(trailPath);
+    updateDots();
+    if (trailPath.length > 1) {
+      // 进来先看全貌。此时关掉跟随，否则 updatePos 会立刻把视图拉回当前点，
+      // 看不到整条轨迹。用户想看当前位置点「回到当前」即可
+      map.setFitView([polyline], false, [50, 50, 50, 70]);
+      follow = false;
+      var fb = document.getElementById('btnFollow');
+      if (fb) fb.className = '';
+    }
+  } catch (e) {
+  }
+};
+
+window.clearTrail = function () {
+  trailPath = [];
+  if (polyline) polyline.setPath([]);
+  if (dots) dots.setData([]);
+};
+
+window.toggleFollow = function () {
+  follow = !follow;
+  var b = document.getElementById('btnFollow');
+  b.className = follow ? 'on' : '';
+  if (follow && lastFix) map.setCenter([lastFix.lng, lastFix.lat]);
+  return follow;
+};
+
+window.toggleLayer = function () {
+  darkLayer = !darkLayer;
+  map.setMapStyle('amap://styles/' + (darkLayer ? 'dark' : 'normal'));
+  document.getElementById('btnLayer').className = darkLayer ? '' : 'on';
+};
+
+/** 定位到当前点 */
+window.recenter = function () {
+  if (lastFix) {
+    map.setZoomAndCenter(17, [lastFix.lng, lastFix.lat]);
+    follow = true;
+    document.getElementById('btnFollow').className = 'on';
+  }
+};
+</script>
+
+<!-- 高德 JS API 2.0。plugin 里按需加载，别贪多否则首屏慢。
+     Key 从上面的 AMAP_KEY 变量拼进 URL，不在本文件里硬编码。 -->
+<script>
+(function loadAMap() {
+  if (!AMAP_KEY || AMAP_KEY.indexOf('__') === 0) {
+    showMask('<div class="t">还没配置高德 Key</div>'
+      + '<div>用 tools/set-map-key.sh 填入你自己的「Web端(JS API)」Key，然后重新编译</div>');
+    return;
+  }
+  var s = document.createElement('script');
+  s.src = 'https://webapi.amap.com/maps?v=2.0&key=' + encodeURIComponent(AMAP_KEY) + '&plugin=AMap.Scale';
+  s.onload = function () { initMap(); };
+  s.onerror = function () {
+    showMask('<div class="t">地图 SDK 加载失败</div>'
+      + '<div>检查网络，或确认 Key 是否为「Web端(JS API)」类型</div>');
+  };
+  document.head.appendChild(s);
+})();
+</script>
+
+</body>
+</html>

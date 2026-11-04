@@ -11,3 +11,14 @@ __pycache__/
 
 # 运行时产物
 *.log
+
+# 鸿蒙工程：构建缓存、依赖与签名产物
+harmony/**/.hvigor/
+harmony/**/build/
+harmony/**/oh_modules/
+harmony/**/local.properties
+harmony/产物/
+*.hap
+*.p7b
+*.p12
+*.cer

@@ -1,0 +1,26 @@
+{
+  "name": "gnss-web-host",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "浏览器直连串口的 GNSS 上位机：天空图 / 载噪比 / 轨迹 / NMEA 日志诊断报告",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/z75993971/gnss-web-host.git"
+  },
+  "keywords": [
+    "gnss",
+    "nmea",
+    "web-serial",
+    "gps",
+    "unicore",
+    "ntrip"
+  ],
+  "scripts": {
+    "start": "python3 server.py",
+    "test": "node selftest.mjs",
+    "samples": "python3 tools/make_samples.py",
+    "e2e": "python3 tools/e2e_analysis.py"
+  }
+}

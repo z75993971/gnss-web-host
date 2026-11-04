@@ -1,0 +1,13 @@
+# 本机私有配置，含地图密钥，不要提交
+map-key.local.js
+
+# 系统垃圾
+.DS_Store
+Thumbs.db
+
+# Python
+__pycache__/
+*.pyc
+
+# 运行时产物
+*.log

@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head><meta charset="UTF-8"><title>控制中心回读测试</title></head>
+<body>
+<div id="ctlRoot"></div>
+<pre id="out">running…</pre>
+<script type="module">
+import { ControlCenter } from './controls.js';
+
+const sent = [];
+const ctl = new ControlCenter(document.getElementById('ctlRoot'), {
+  send: (c) => sent.push(c),
+  toast: () => {},
+  isConnected: () => true,
+});
+
+// 实机抓到的真实应答（2026-11-01，和芯星通 UM621A-02 / R6.0.0.0Build4963）
+const REAL = [
+  '$PDTINFO,UM621A-02,G1B1L1E1,V1.5,R6.0.0.0Build4963,2310414000046,Q715B2251400270*4F',
+  '$CFGPRT,1,0,460800,H481,HA3*7C',
+  '$CFGSYS,H155155*7F',
+  '$CFGINS,2,1,1,1*15',
+  '$CFGROTAT,0,0,0,2*1C',
+  '$CFGODOFWD,1*4E',
+  '$CFGDYN,h00,0,0*55',
+  '$CFGGEOID,0*1E',
+  '$CFGTP,1000000,500000,1,0,0,0*73',
+];
+for (const l of REAL) ctl.pushResponse(l);
+
+const val = (id) => {
+  const el = document.getElementById(id);
+  return el ? el.value : null;
+};
+const seg = (n) => {
+  const b = document.querySelector(`.seg[data-seg="${n}"] button.on`);
+  return b ? b.dataset.val : null;
+};
+const sysOn = () => [...document.querySelectorAll('input[data-sys]')]
+  .filter((c) => c.checked).map((c) => c.dataset.sys);
+
+const result = {
+  prtPort: val('prtPort'),
+  prtBaud: val('prtBaud'),
+  prtCfg1: ctl.prtCfg[1] || null,
+  sysMaskShown: document.getElementById('sysMaskView').textContent,
+  sysChecked: sysOn(),
+  insMode: val('insMode'),
+  insImu: val('insImu'),
+  insOdo: val('insOdo'),
+  insMap: val('insMap'),
+  rotX: val('rotX'), rotY: val('rotY'), rotZ: val('rotZ'),
+  rotMode: seg('rotMode'),
+  odoFwd: seg('odoFwd'),
+  dynModel: val('dynModel'),
+  dynThresh: val('dynThresh'),
+  geoid: seg('geoid'),
+  ppsLen: val('ppsLen'),
+  ppsEn: seg('ppsEn'),
+  ppsEdge: seg('ppsEdge'),
+  ppsAlways: seg('ppsAlways'),
+  ppsAntDelay: val('ppsAntDelay'),
+  respLines: ctl.resp.length,
+};
+
+// 断言
+const expect = {
+  prtPort: '1', prtBaud: '460800',
+  sysMaskShown: 'h155155',
+  insMode: '2', insImu: '1', insOdo: '1', insMap: '1',
+  rotX: '0', rotMode: '2', odoFwd: '1',
+  dynModel: '0', geoid: '0',
+  ppsLen: '500000', ppsEn: '1', ppsEdge: '0', ppsAlways: '0', ppsAntDelay: '0',
+};
+const fails = [];
+for (const [k, v] of Object.entries(expect)) {
+  if (result[k] !== v) fails.push(`${k}: 期望 ${v} 实际 ${result[k]}`);
+}
+if (!result.sysChecked.includes('sbas')) fails.push('SBAS 未按回读勾选');
+if (result.sysChecked.length !== 10) fails.push('勾选频点数不是 10 而是 ' + result.sysChecked.length);
+if (!result.prtCfg1 || result.prtCfg1.inProto !== 'H481' || result.prtCfg1.outProto !== 'HA3') {
+  fails.push('串口协议位未保存：' + JSON.stringify(result.prtCfg1));
+}
+
+document.getElementById('out').textContent = JSON.stringify({ result, fails }, null, 1);
+</script>
+</body>
+</html>
